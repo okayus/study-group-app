@@ -81,13 +81,15 @@ handleError e = do
   exitFailure
 
 -- | 例外メッセージが API サーバーへの接続失敗っぽいか判定する。
--- http-client の例外は "ConnectionFailure" / "Connection refused" を含むため、
--- それらをキーワードに簡易判定する。完璧ではないが、無関係な例外まで
--- 「サーバー未起動」と案内してしまうよりは正確になる。
+-- http-client の例外は接続できない場合 "ConnectionFailure" / "Connection refused"
+-- を含むため、それをキーワードに判定する。
+-- ※ "HttpExceptionRequest" は ResponseTimeout など接続成功後の異常も含めて
+-- 全 HTTP 例外に出る文字列なので判定キーワードに入れない。入れてしまうと
+-- 「サーバーは生きているが応答が返らない」ケースまで「サーバー未起動」と
+-- 誤誘導してしまう。
 isConnectionError :: String -> Bool
 isConnectionError msg =
   any (`isInfixOf` msg)
     [ "ConnectionFailure"
     , "Connection refused"
-    , "HttpExceptionRequest"
     ]

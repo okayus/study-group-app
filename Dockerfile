@@ -26,6 +26,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends libgmp10 \
  && rm -rf /var/lib/apt/lists/*
 
+# locale を UTF-8 に固定する。
+# debian:bookworm-slim のデフォルトは LC_CTYPE=POSIX のため、Haskell の getArgs が
+# argv の日本語バイト列を UTF-8 として読まず GHC roundtrip サロゲートに化け、
+# 自前 encodeUtf8Chars が不正な UTF-8 を送出 → サーバー側 hGetChar がデコード例外を
+# 投げてレスポンスを返さなくなる (クライアントは ResponseTimeout)。
+# C.UTF-8 は glibc に同梱されており追加パッケージ不要で利用できる。
+ENV LANG=C.UTF-8
+
 WORKDIR /app
 
 COPY --from=builder /build/study-group-server /usr/local/bin/study-group-server

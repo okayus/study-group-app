@@ -39,9 +39,9 @@
 ## Phase 3: CLI クライアント（自前実装）
 
 ### Step 6: CLI 実装
-- [ ] コマンドライン引数パース（`System.Environment.getArgs` + パターンマッチ）
-- [ ] HTTP クライアント（`Network.Socket` で API サーバーに接続）
-- [ ] コマンド一覧:
+- [x] コマンドライン引数パース（`System.Environment.getArgs` + パターンマッチ）
+- [x] HTTP クライアント（`Network.Socket` で API サーバーに接続）
+- [x] コマンド一覧:
   - `study-group interests list [NAME]` - 興味リスト表示
   - `study-group interests add NAME TOPIC` - 興味の追加
   - `study-group interests remove NAME TOPIC` - 興味の削除

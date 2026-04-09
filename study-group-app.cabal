@@ -27,7 +27,9 @@ library
     StudyGroup.Http.Response
     StudyGroup.Http.Router
     StudyGroup.Http.Server
+    StudyGroup.Http.Client
     StudyGroup.Api
+    StudyGroup.Cli
 
 executable study-group-server
   import:          shared

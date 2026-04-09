@@ -193,26 +193,43 @@ extractDateAndTopic _ = Nothing
 -- DELETE /members/:name/interests/:topic で日本語トピック名が
 -- %E3%83%86%E3%82%B9%E3%83%88 のようにエンコードされて送られるため、
 -- 元の文字列に復元する必要がある。
--- '%' + 16進2桁 → 対応する文字に変換。'+' → 空白。それ以外はそのまま。
--- UTF-8 のマルチバイト文字はバイト単位でデコードされ、
--- Haskell の Char 型（Unicode コードポイント）に変換される。
+--
+-- 処理フロー:
+--   1. '%XX' シーケンスをバイト値に変換して収集
+--   2. 連続する '%XX' が終わったら、収集したバイト列を UTF-8 デコード
+--   3. '+' は空白に、その他はそのまま返す
+--
+-- 旧実装は各 %XX を独立した Char に変換していたため、
+-- 日本語のような UTF-8 マルチバイト文字（例: テ = %E3%83%86 = 3バイト）を
+-- 正しくデコードできなかった。新実装は連続するバイト列をまとめて処理する。
 decodeURIComponent :: String -> String
 decodeURIComponent [] = []
 decodeURIComponent ('%':h1:h2:rest) =
-  case hexToChar h1 h2 of
+  case hexToByte h1 h2 of
     Nothing -> '%' : decodeURIComponent (h1:h2:rest)
-    Just c  -> c : decodeURIComponent rest
+    Just b  ->
+      let (bytes, remaining) = collectPercentBytes rest
+      in utf8Decode (b : bytes) ++ decodeURIComponent remaining
 decodeURIComponent ('+':rest) = ' ' : decodeURIComponent rest
 decodeURIComponent (c:rest) = c : decodeURIComponent rest
 
--- | 16進数2桁を Char に変換する。
--- 2つの16進数字をそれぞれ数値に変換し、上位4ビット + 下位4ビットを合成して
--- toEnum で Char にする。どちらかの桁が無効な16進数字なら Nothing。
-hexToChar :: Char -> Char -> Maybe Char
-hexToChar h1 h2 = do
+-- | 連続する %XX シーケンスからバイト列を収集する。
+-- UTF-8 マルチバイト文字は連続した %XX として送られるため、
+-- 全バイトをまとめて収集してから utf8Decode に渡す必要がある。
+collectPercentBytes :: String -> ([Int], String)
+collectPercentBytes ('%':h1:h2:rest) =
+  case hexToByte h1 h2 of
+    Nothing -> ([], '%':h1:h2:rest)
+    Just b  -> let (bs, remaining) = collectPercentBytes rest
+               in (b : bs, remaining)
+collectPercentBytes s = ([], s)
+
+-- | 16進数2桁をバイト値 (0-255) に変換する。
+hexToByte :: Char -> Char -> Maybe Int
+hexToByte h1 h2 = do
   d1 <- hexDigit h1
   d2 <- hexDigit h2
-  Just (toEnum (d1 * 16 + d2))
+  Just (d1 * 16 + d2)
 
 -- | 16進数字1文字を数値 (0-15) に変換する。
 -- '0'-'9' → 0-9、'a'-'f' / 'A'-'F' → 10-15。
@@ -223,3 +240,29 @@ hexDigit c
   | c >= 'a' && c <= 'f' = Just (fromEnum c - fromEnum 'a' + 10)
   | c >= 'A' && c <= 'F' = Just (fromEnum c - fromEnum 'A' + 10)
   | otherwise             = Nothing
+
+-- | UTF-8 バイト列を Haskell の String (Unicode コードポイント列) にデコードする。
+-- RFC 3629 に準拠:
+--   0xxxxxxx                            → U+0000..U+007F (1バイト)
+--   110xxxxx 10xxxxxx                   → U+0080..U+07FF (2バイト)
+--   1110xxxx 10xxxxxx 10xxxxxx          → U+0800..U+FFFF (3バイト, 日本語)
+--   11110xxx 10xxxxxx 10xxxxxx 10xxxxxx → U+10000..U+10FFFF (4バイト)
+utf8Decode :: [Int] -> String
+utf8Decode [] = []
+utf8Decode (b:bs)
+  | b <= 0x7F = toEnum b : utf8Decode bs
+  | b <= 0xDF = case bs of
+      (b2:rest) ->
+        let cp = (b - 0xC0) * 64 + (b2 - 0x80)
+        in toEnum cp : utf8Decode rest
+      _ -> []
+  | b <= 0xEF = case bs of
+      (b2:b3:rest) ->
+        let cp = (b - 0xE0) * 4096 + (b2 - 0x80) * 64 + (b3 - 0x80)
+        in toEnum cp : utf8Decode rest
+      _ -> []
+  | otherwise = case bs of
+      (b2:b3:b4:rest) ->
+        let cp = (b - 0xF0) * 262144 + (b2 - 0x80) * 4096 + (b3 - 0x80) * 64 + (b4 - 0x80)
+        in toEnum cp : utf8Decode rest
+      _ -> []

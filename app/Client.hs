@@ -2,6 +2,7 @@ module Main where
 
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
+import System.IO (hPutStrLn, stderr)
 import Control.Exception (catch, SomeException)
 
 import StudyGroup.Cli (parseArgs, executeCommand)
@@ -9,22 +10,32 @@ import StudyGroup.Cli (parseArgs, executeCommand)
 -- | CLI エントリポイント。
 -- 処理フロー:
 --   1. getArgs でコマンドライン引数を取得
---   2. parseArgs でパターンマッチにより Command に変換
---   3. executeCommand で API サーバーにリクエストを送信し結果を表示
---
--- 引数が認識できなければ使い方を表示して終了する。
--- API サーバーへの接続失敗等の例外は catch で捕捉し、
--- ユーザーにわかりやすいエラーメッセージを表示する。
+--   2. ヘルプ要求 (引数なし / -h / --help / help) ならそのまま usage を表示して正常終了
+--   3. それ以外は parseArgs で Command に変換し、認識できなければ usage + 異常終了
+--   4. 認識できれば executeCommand を実行 (例外は catch でハンドリング)
 main :: IO ()
 main = do
   args <- getArgs
-  case parseArgs args of
-    Nothing -> do
-      printUsage
-      exitFailure
-    Just cmd ->
-      executeCommand cmd
-        `catch` handleError
+  if isHelpRequest args
+    then printUsage
+    else case parseArgs args of
+      Nothing -> do
+        hPutStrLn stderr ("Unknown command: " ++ unwords args)
+        printUsage
+        exitFailure
+      Just cmd ->
+        executeCommand cmd
+          `catch` handleError
+
+-- | 引数がヘルプ要求かどうか判定する。
+-- 引数なし、または `-h` / `--help` / `help` のいずれか単独で渡された場合に True。
+-- これらは「正常な使い方」として扱い、usage を stdout に出して終了コード 0 で抜ける。
+isHelpRequest :: [String] -> Bool
+isHelpRequest []         = True
+isHelpRequest ["-h"]     = True
+isHelpRequest ["--help"] = True
+isHelpRequest ["help"]   = True
+isHelpRequest _          = False
 
 -- | 使い方を表示する。
 -- 不正な引数が渡された場合に呼ばれる。

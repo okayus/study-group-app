@@ -2,8 +2,9 @@ module Main where
 
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn, hSetEncoding, stderr, stdout, utf8)
 import Control.Exception (catch, SomeException)
+import Data.List (isInfixOf)
 
 import StudyGroup.Cli (parseArgs, executeCommand)
 
@@ -15,6 +16,12 @@ import StudyGroup.Cli (parseArgs, executeCommand)
 --   4. 認識できれば executeCommand を実行 (例外は catch でハンドリング)
 main :: IO ()
 main = do
+  -- コンテナ等の locale が C / POSIX のとき、stdout のデフォルトエンコーディングが
+  -- ASCII になり、API レスポンスに含まれる日本語 (例: "ノリさん") を putStrLn
+  -- しようとした瞬間に commitBuffer: invalid argument で落ちる。
+  -- 実行環境の locale に依存しないよう、ここで UTF-8 を強制する。
+  hSetEncoding stdout utf8
+  hSetEncoding stderr utf8
   args <- getArgs
   if isHelpRequest args
     then printUsage
@@ -60,9 +67,27 @@ printUsage = do
   putStrLn "  study-group sessions add 2026-04-16 \"HTTP server\""
 
 -- | 例外を捕捉してエラーメッセージを表示する。
--- API サーバーが起動していない場合に接続エラーが発生するため、
--- そのケースをユーザーにわかりやすく案内する。
+-- 例外メッセージに接続失敗系のキーワードが含まれているときだけ
+-- 「サーバー起動してる?」のヒントを添える。それ以外の例外
+-- (エンコーディング不整合・JSON パース失敗など) ではヒントを出さない。
+-- 全ての例外を「サーバー未起動」に丸めると、無関係なバグを誤誘導してしまう。
 handleError :: SomeException -> IO ()
 handleError e = do
-  putStrLn $ "Error: " ++ show e
-  putStrLn "Is the API server running? Start it with: cabal run study-group-server"
+  let msg = show e
+  hPutStrLn stderr ("Error: " ++ msg)
+  if isConnectionError msg
+    then hPutStrLn stderr "Is the API server running? Start it with: docker compose up --build"
+    else return ()
+  exitFailure
+
+-- | 例外メッセージが API サーバーへの接続失敗っぽいか判定する。
+-- http-client の例外は "ConnectionFailure" / "Connection refused" を含むため、
+-- それらをキーワードに簡易判定する。完璧ではないが、無関係な例外まで
+-- 「サーバー未起動」と案内してしまうよりは正確になる。
+isConnectionError :: String -> Bool
+isConnectionError msg =
+  any (`isInfixOf` msg)
+    [ "ConnectionFailure"
+    , "Connection refused"
+    , "HttpExceptionRequest"
+    ]

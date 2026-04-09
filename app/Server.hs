@@ -1,6 +1,7 @@
 module Main where
 
 import Data.IORef (newIORef)
+import System.IO (hSetEncoding, stderr, stdout, utf8)
 import StudyGroup.Storage (loadData, dataFilePath)
 import StudyGroup.Http.Server (runServer)
 import StudyGroup.Api (handleRequest)
@@ -18,6 +19,10 @@ import StudyGroup.Api (handleRequest)
 --   メモリ上にデータを保持し、変更時のみファイルに書き出す。
 main :: IO ()
 main = do
+  -- コンテナ等で locale が C / POSIX のとき、ログ中の日本語が
+  -- commitBuffer: invalid argument で落ちないように UTF-8 を強制する。
+  hSetEncoding stdout utf8
+  hSetEncoding stderr utf8
   putStrLn "Loading data..."
   appData <- loadData dataFilePath
   ref <- newIORef appData

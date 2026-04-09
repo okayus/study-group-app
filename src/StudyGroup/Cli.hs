@@ -4,8 +4,11 @@ module StudyGroup.Cli
   , executeCommand
   ) where
 
+import System.Environment (lookupEnv)
+import Data.Maybe (fromMaybe)
+
 import StudyGroup.Http.Types (HttpMethod(..), HttpRequest(..))
-import StudyGroup.Http.Client (sendRequest)
+import StudyGroup.Http.ClientTls (sendRequest)
 import StudyGroup.Json.Types (JsonValue(..))
 import StudyGroup.Json.Parser (parseJson)
 import StudyGroup.Json.Printer (renderJson)
@@ -35,14 +38,15 @@ parseArgs ["sessions", "list"]             = Just SessionsList
 parseArgs ["sessions", "add", date, topic] = Just (SessionsAdd date topic)
 parseArgs _                                = Nothing
 
--- | API サーバーのホスト名とポート番号。
--- ローカル開発では localhost:8080 固定。
--- 将来的に環境変数や引数で切り替える場合はここを変更する。
-apiHost :: String
-apiHost = "localhost"
+-- | API サーバーのベース URL を取得する。
+-- 環境変数 STUDY_GROUP_API_URL を読み、未設定なら localhost にフォールバック。
+-- スキーム付き URL なので HTTP/HTTPS どちらでも `parseRequest` がそのまま解釈できる。
+-- Cloud Run のような HTTPS エンドポイントを指す場合もこの関数の戻り値を変えるだけでよい。
+defaultApiBaseUrl :: String
+defaultApiBaseUrl = "http://localhost:8080"
 
-apiPort :: Int
-apiPort = 8080
+apiBaseUrl :: IO String
+apiBaseUrl = fromMaybe defaultApiBaseUrl <$> lookupEnv "STUDY_GROUP_API_URL"
 
 -- | Command を実行する。
 -- 各コマンドを対応する HTTP リクエストに変換し、
@@ -51,14 +55,16 @@ apiPort = 8080
 -- パターンマッチで全コマンドを網羅的に処理する。
 executeCommand :: Command -> IO ()
 executeCommand (InterestsList Nothing) = do
-  body <- sendRequest apiHost apiPort (mkRequest GET "/members" "")
+  url <- apiBaseUrl
+  body <- sendRequest url (mkRequest GET "/members" "")
   case parseJson body of
     Just (JsonArray members) ->
       mapM_ (putStrLn . formatMember) members
     _ -> putStrLn body
 
 executeCommand (InterestsList (Just name)) = do
-  body <- sendRequest apiHost apiPort
+  url <- apiBaseUrl
+  body <- sendRequest url
     (mkRequest GET ("/members/" ++ name ++ "/interests") "")
   case parseJson body of
     Just (JsonArray interests) ->
@@ -66,32 +72,36 @@ executeCommand (InterestsList (Just name)) = do
     _ -> putStrLn body
 
 executeCommand (InterestsAdd name topic) = do
+  url <- apiBaseUrl
   let jsonBody = renderJson (JsonObject [("topic", JsonString topic)])
-  body <- sendRequest apiHost apiPort
+  body <- sendRequest url
     (mkRequest POST ("/members/" ++ name ++ "/interests") jsonBody)
   case parseJson body of
     Just val -> putStrLn ("Added: " ++ formatInterest val)
     _        -> putStrLn body
 
 executeCommand (InterestsRemove name topic) = do
+  url <- apiBaseUrl
   let encodedTopic = encodeURIComponent topic
-  _ <- sendRequest apiHost apiPort
+  _ <- sendRequest url
     (mkRequest DELETE ("/members/" ++ name ++ "/interests/" ++ encodedTopic) "")
   putStrLn ("Removed: " ++ topic ++ " from " ++ name)
 
 executeCommand SessionsList = do
-  body <- sendRequest apiHost apiPort (mkRequest GET "/sessions" "")
+  url <- apiBaseUrl
+  body <- sendRequest url (mkRequest GET "/sessions" "")
   case parseJson body of
     Just (JsonArray sessions) ->
       mapM_ (putStrLn . formatSession) sessions
     _ -> putStrLn body
 
 executeCommand (SessionsAdd date topic) = do
+  url <- apiBaseUrl
   let jsonBody = renderJson (JsonObject
         [ ("date", JsonString date)
         , ("topic", JsonString topic)
         ])
-  body <- sendRequest apiHost apiPort
+  body <- sendRequest url
     (mkRequest POST "/sessions" jsonBody)
   case parseJson body of
     Just val -> putStrLn ("Added: " ++ formatSession val)

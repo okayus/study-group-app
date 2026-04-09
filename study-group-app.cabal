@@ -13,7 +13,11 @@ common shared
 library
   import:          shared
   hs-source-dirs:  src
-  build-depends:   network >=3.1 && <4
+  build-depends:
+    , network          >=3.1 && <4
+    , http-client      >=0.7 && <0.8
+    , http-client-tls  >=0.3 && <0.4
+    , bytestring       >=0.10 && <0.13
   exposed-modules:
     StudyGroup.Types
     StudyGroup.Json.Types
@@ -28,6 +32,7 @@ library
     StudyGroup.Http.Router
     StudyGroup.Http.Server
     StudyGroup.Http.Client
+    StudyGroup.Http.ClientTls
     StudyGroup.Api
     StudyGroup.Cli
 

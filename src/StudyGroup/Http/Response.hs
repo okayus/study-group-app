@@ -28,8 +28,23 @@ renderResponse resp =
       line = "HTTP/1.1 " ++ show (statusCode status) ++ " " ++ statusMessage status ++ "\r\n"
       hdrs = concatMap renderHeader (responseHeaders resp)
       body = responseBody resp
-      contentLength = "Content-Length: " ++ show (length body) ++ "\r\n"
+      contentLength = "Content-Length: " ++ show (utf8ByteLength body) ++ "\r\n"
   in line ++ hdrs ++ contentLength ++ "\r\n" ++ body
+
+-- | 文字列を UTF-8 でエンコードしたときのバイト数を計算する。
+-- length は Char 数（Unicode コードポイント数）を返すため、
+-- Content-Length ヘッダーに使うとマルチバイト文字（日本語等）で
+-- 実バイト数より小さい値が出てクライアント側でレスポンスが切り詰められる。
+-- 自前実装方針なので RFC 3629 のバイト幅判定をその場で行う。
+utf8ByteLength :: String -> Int
+utf8ByteLength = sum . map charLen
+  where
+    charLen c
+      | cp <= 0x7F   = 1
+      | cp <= 0x7FF  = 2
+      | cp <= 0xFFFF = 3
+      | otherwise    = 4
+      where cp = fromEnum c
 
 -- | ヘッダー1行を "Name: value\r\n" 形式にレンダリングする。
 renderHeader :: (String, String) -> String

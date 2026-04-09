@@ -105,10 +105,12 @@ handleClient sock handler = do
 -- | HTTP リクエスト全体を Handle から読み取る。
 -- 2段階で読む:
 --   1. readUntilHeaderEnd: ヘッダー終端 \r\n\r\n が来るまで読む
---   2. Content-Length があれば、ヘッダー後に続くボディの残りバイトを読む
+--   2. Content-Length があれば、ヘッダー後に続くボディの残り「バイト数」を読む
 --
--- ヘッダー読み取り時にボディの一部も読み込んでしまう場合があるため、
--- dropHeaderEnd で既に読んだボディ部分を計算し、残りだけ追加で読む。
+-- Content-Length は UTF-8 の「バイト数」なので、Char 単位ではなく
+-- 各 Char を UTF-8 にしたときのバイト幅を加算して比較する必要がある。
+-- 旧クライアント（自作）は length（Char 数）で Content-Length を出していたため
+-- たまたま整合していたが、http-client 等の正しい実装は必ずバイトで送ってくる。
 readRequest :: Handle -> IO String
 readRequest hdl = do
   headers <- readUntilHeaderEnd hdl ""
@@ -117,13 +119,26 @@ readRequest hdl = do
     Nothing  -> return headers
     Just len -> do
       let bodyStart = dropHeaderEnd headers
-          alreadyRead = length bodyStart
-          remaining = len - alreadyRead
+          alreadyReadBytes = utf8ByteLength bodyStart
+          remaining = len - alreadyReadBytes
       if remaining <= 0
         then return headers
         else do
-          moreBody <- readExact hdl remaining
+          moreBody <- readExactBytes hdl remaining
           return (headers ++ moreBody)
+
+-- | 文字列を UTF-8 でエンコードしたときのバイト数を計算する。
+-- Response 側の utf8ByteLength と同じロジックを Server モジュール内で
+-- 自己完結させる（Server から Response への依存を増やさない設計判断）。
+utf8ByteLength :: String -> Int
+utf8ByteLength = sum . map charLen
+  where
+    charLen c
+      | cp <= 0x7F   = 1
+      | cp <= 0x7FF  = 2
+      | cp <= 0xFFFF = 3
+      | otherwise    = 4
+      where cp = fromEnum c
 
 -- | \r\n\r\n（ヘッダー終端）が見つかるまで1文字ずつ読む。
 -- 文字を逆順で蓄積（cons で先頭に追加 = O(1)）し、完了時に reverse する。
@@ -149,19 +164,29 @@ endsWithCRLFCRLF :: String -> Bool
 endsWithCRLFCRLF ('\n':'\r':'\n':'\r':_) = True
 endsWithCRLFCRLF _                        = False
 
--- | Handle から指定した文字数を正確に読み取る。
--- Content-Length で指定されたボディの残りバイトを読むために使う。
+-- | Handle から指定したバイト数ぶん UTF-8 文字を読み取る。
+-- Handle は UTF-8 モードなので hGetChar が 1〜4 バイトをまとめて 1 Char に
+-- 変換する。残りバイト数を「読み取った Char の UTF-8 バイト幅」で減算して
+-- ループする。
 -- EOF に達したら途中で切り上げる（クライアントが途中で切断した場合の安全策）。
-readExact :: Handle -> Int -> IO String
-readExact _ 0 = return ""
-readExact hdl n = do
+readExactBytes :: Handle -> Int -> IO String
+readExactBytes _ n | n <= 0 = return ""
+readExactBytes hdl n = do
   eof <- hIsEOF hdl
   if eof
     then return ""
     else do
       c <- hGetChar hdl
-      rest <- readExact hdl (n - 1)
+      let used = charUtf8Bytes c
+      rest <- readExactBytes hdl (n - used)
       return (c : rest)
+  where
+    charUtf8Bytes c
+      | cp <= 0x7F   = 1
+      | cp <= 0x7FF  = 2
+      | cp <= 0xFFFF = 3
+      | otherwise    = 4
+      where cp = fromEnum c
 
 -- | 文字列から \r\n\r\n 以降の部分（ボディの開始部分）を取得する。
 -- readUntilHeaderEnd がヘッダー終端を含めて読み取るので、

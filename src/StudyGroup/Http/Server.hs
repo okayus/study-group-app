@@ -36,7 +36,15 @@ import StudyGroup.Http.Types (HttpRequest, HttpResponse, HttpStatus(..))
 import StudyGroup.Http.Parser (parseRequest)
 import StudyGroup.Http.Response (renderResponse, errorResponse)
 
--- | サーバーを起動して接続を待ち受ける
+-- | TCP ソケットで HTTP サーバーを起動し、リクエストを待ち受ける。
+-- ハンドラー関数を引数に取る高階関数設計により、
+-- ソケット管理（この関数）とビジネスロジック（ハンドラー）が疎結合になる。
+--
+-- 処理フロー:
+--   1. getAddrInfo で 0.0.0.0:port のアドレス情報を取得
+--   2. openSocket でソケットを作成・バインド・リッスン
+--   3. acceptLoop で接続を受け付けるループに入る
+--   4. bracket で異常終了時もソケットを確実に close する
 runServer :: Int -> (HttpRequest -> IO HttpResponse) -> IO ()
 runServer port handler = do
   let hints = defaultHints { addrSocketType = Stream }
@@ -45,6 +53,11 @@ runServer port handler = do
     putStrLn $ "Server running on port " ++ show port
     acceptLoop sock handler
 
+-- | アドレス情報からサーバーソケットを作成し、バインド・リッスンする。
+-- bracketOnError により、バインドやリッスンで例外が発生した場合も
+-- ソケットが確実に close される（リソースリーク防止）。
+-- ReuseAddr を設定して、サーバー再起動時に "Address already in use" を防ぐ。
+-- listen のバックログ 5 は、同時接続待ちキューの最大数。
 openSocket :: AddrInfo -> IO Socket
 openSocket addr = bracketOnError
   (socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr))
@@ -56,7 +69,12 @@ openSocket addr = bracketOnError
     return sock
   )
 
--- | 接続を受け付けるループ
+-- | 接続を受け付ける無限ループ。
+-- accept でクライアント接続をブロッキング待機し、
+-- handleClient でリクエストを処理する。
+-- 1クライアントの処理中に例外が発生しても catch で捕捉してログ出力し、
+-- ループを継続する（1リクエストの失敗がサーバー全体を停止させない）。
+-- 末尾再帰でループを実現（Haskell ではループ構文を使わない）。
 acceptLoop :: Socket -> (HttpRequest -> IO HttpResponse) -> IO ()
 acceptLoop serverSock handler = do
   (clientSock, _clientAddr) <- accept serverSock
@@ -64,7 +82,13 @@ acceptLoop serverSock handler = do
     `catch` (\e -> putStrLn $ "Error: " ++ show (e :: SomeException))
   acceptLoop serverSock handler
 
--- | クライアント接続を処理（Handle 経由で読み書き）
+-- | 1つのクライアント接続を処理する。
+-- socketToHandle でソケットを Handle に変換し、System.IO の関数で読み書きする。
+-- Handle 化する理由:
+--   - base の System.IO 関数が使える（bytestring パッケージへの依存を回避）
+--   - hSetEncoding で UTF-8 を設定でき、日本語を正しく扱える
+-- NoBuffering にする理由: レスポンスを即座に送信するため。
+-- 処理後は hClose でソケットも含めてクリーンアップされる。
 handleClient :: Socket -> (HttpRequest -> IO HttpResponse) -> IO ()
 handleClient sock handler = do
   hdl <- socketToHandle sock ReadWriteMode
@@ -78,8 +102,13 @@ handleClient sock handler = do
   hFlush hdl
   hClose hdl
 
--- | HTTP リクエスト全体を読み取る
---   ヘッダーを \r\n\r\n まで読み、Content-Length があればボディも読む
+-- | HTTP リクエスト全体を Handle から読み取る。
+-- 2段階で読む:
+--   1. readUntilHeaderEnd: ヘッダー終端 \r\n\r\n が来るまで読む
+--   2. Content-Length があれば、ヘッダー後に続くボディの残りバイトを読む
+--
+-- ヘッダー読み取り時にボディの一部も読み込んでしまう場合があるため、
+-- dropHeaderEnd で既に読んだボディ部分を計算し、残りだけ追加で読む。
 readRequest :: Handle -> IO String
 readRequest hdl = do
   headers <- readUntilHeaderEnd hdl ""
@@ -96,7 +125,11 @@ readRequest hdl = do
           moreBody <- readExact hdl remaining
           return (headers ++ moreBody)
 
--- | \r\n\r\n が見つかるまで1文字ずつ読む
+-- | \r\n\r\n（ヘッダー終端）が見つかるまで1文字ずつ読む。
+-- 文字を逆順で蓄積（cons で先頭に追加 = O(1)）し、完了時に reverse する。
+-- 1文字ずつ読む理由: ヘッダー終端を正確に検出するため。
+-- バッファリングすると \r\n\r\n が読み取りチャンクの境界をまたぐケースの
+-- 処理が複雑化する。パフォーマンスよりシンプルさを優先した設計判断。
 readUntilHeaderEnd :: Handle -> String -> IO String
 readUntilHeaderEnd hdl acc = do
   eof <- hIsEOF hdl
@@ -109,12 +142,16 @@ readUntilHeaderEnd hdl acc = do
         then return (reverse acc')
         else readUntilHeaderEnd hdl acc'
 
--- | 蓄積された逆順文字列が \r\n\r\n で終わるか
+-- | 逆順に蓄積された文字列が \r\n\r\n で終わっているか判定する。
+-- acc は逆順なので、先頭4文字が \n\r\n\r なら元の文字列は \r\n\r\n で終わる。
+-- パターンマッチで効率的に判定（文字列比較やリスト操作なし）。
 endsWithCRLFCRLF :: String -> Bool
 endsWithCRLFCRLF ('\n':'\r':'\n':'\r':_) = True
 endsWithCRLFCRLF _                        = False
 
--- | 指定文字数を正確に読む
+-- | Handle から指定した文字数を正確に読み取る。
+-- Content-Length で指定されたボディの残りバイトを読むために使う。
+-- EOF に達したら途中で切り上げる（クライアントが途中で切断した場合の安全策）。
 readExact :: Handle -> Int -> IO String
 readExact _ 0 = return ""
 readExact hdl n = do
@@ -126,51 +163,67 @@ readExact hdl n = do
       rest <- readExact hdl (n - 1)
       return (c : rest)
 
--- | ヘッダー終端以降（ボディ部分）を取得
+-- | 文字列から \r\n\r\n 以降の部分（ボディの開始部分）を取得する。
+-- readUntilHeaderEnd がヘッダー終端を含めて読み取るので、
+-- ヘッダー部分を読み飛ばしてボディだけを取り出す。
 dropHeaderEnd :: String -> String
 dropHeaderEnd ('\r':'\n':'\r':'\n':rest) = rest
 dropHeaderEnd (_:xs) = dropHeaderEnd xs
 dropHeaderEnd []     = ""
 
--- | Content-Length ヘッダーの値を探す
+-- | HTTP ヘッダー文字列から Content-Length の値を探す。
+-- ヘッダー文字列を行に分割し、"content-length" で始まる行を探す。
+-- ヘッダー名は case-insensitive なので小文字に変換して比較する。
+-- 見つかったらコロン以降の数値をパースして Just Int で返す。
+-- Content-Length がなければ Nothing（ボディなしリクエスト）。
 findContentLength :: String -> Maybe Int
 findContentLength str =
   case filter isContentLength (rawLines str) of
     []    -> Nothing
     (l:_) -> parseIntAfterColon l
   where
+    -- ヘッダー名の先頭14文字を小文字化して "content-length" と比較
     isContentLength line =
       let lower = map toLowerChar (take 15 line)
       in take 14 lower == "content-length"
 
+    -- CRLF で行分割する（lines' と同様だが、Server モジュール内で自己完結させる）
     rawLines :: String -> [String]
     rawLines "" = []
     rawLines s  = let (l, rest) = breakLine s in l : rawLines rest
 
+    -- 改行で文字列を分割
     breakLine :: String -> (String, String)
     breakLine "" = ("", "")
     breakLine ('\r':'\n':rest) = ("", rest)
     breakLine ('\n':rest)      = ("", rest)
     breakLine (c:rest)         = let (l, r) = breakLine rest in (c:l, r)
 
+    -- "Content-Length: 42" からコロン以降の数値をパース
     parseIntAfterColon :: String -> Maybe Int
     parseIntAfterColon s =
       case dropWhile (/= ':') s of
         []    -> Nothing
         (_:r) -> readMaybeInt (dropWhile (== ' ') (stripCR r))
 
+    -- 末尾の \r を除去
     stripCR "" = ""
     stripCR s
       | last s == '\r' = init s
       | otherwise      = s
 
--- | 安全な Int 読み取り
+-- | 文字列を安全に Int に変換する。
+-- reads は Haskell 標準の安全なパース関数で、
+-- 文字列全体が整数として読めた場合のみ Just を返す。
+-- "42" → Just 42、"42abc" → Nothing、"" → Nothing
 readMaybeInt :: String -> Maybe Int
 readMaybeInt s =
   case reads s of
     [(n, "")] -> Just n
     _         -> Nothing
 
+-- | ASCII 文字1文字を小文字に変換する。
+-- findContentLength でヘッダー名を正規化するために使用。
 toLowerChar :: Char -> Char
 toLowerChar c
   | c >= 'A' && c <= 'Z' = toEnum (fromEnum c + 32)

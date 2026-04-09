@@ -1,6 +1,6 @@
 # Study Group App
 
-週一エンジニア勉強会の管理アプリ。Haskell 学習プロジェクトを兼ねており、HTTP サーバー・JSON パーサー・CLI 引数パーサーなどを **`base` パッケージのみ** で自前実装している。
+週一エンジニア勉強会の管理アプリ。Haskell 学習プロジェクトを兼ねており、JSON パーサー・HTTP リクエスト/レスポンスのパース・ルーティング・CLI 引数パース・URL エンコード/デコード・UTF-8 エンコード/デコードを自前で実装している。
 
 ## 構成
 
@@ -19,82 +19,121 @@
 ## 技術方針
 
 - **言語**: Haskell (GHC 9.6 系で確認)
-- **依存ライブラリは `base` のみ**: HTTP サーバー、JSON パース・エンコード、CLI 引数パース、URL エンコード/デコード、HTTPS クライアント (TLS ハンドシェイクは `openssl` バイナリ経由) を全て自前実装している
+- **自前実装が原則**: 当初は `base` のみで全て書く方針だったが、TCP ソケットと HTTPS の TLS ハンドシェイクは現実的に自前が困難なので、最小限のライブラリに委譲している
 - **データ永続化**: JSON ファイル 1 枚 (`data/study-group.json`)。RDB は使わない
 - **コーディング規約**: 純粋関数と IO の明確な分離、代数的データ型 + パターンマッチ、`map` / `filter` / `foldr` 等での宣言的記述
 
+### 自前実装している部分
+
+- JSON パーサー / プリンタ / エンコーダ (`StudyGroup.Json.*`)
+- HTTP リクエスト / レスポンスのパース・組み立て (`StudyGroup.Http.Parser`, `StudyGroup.Http.Response`)
+- URL ルーティング (`StudyGroup.Http.Router`)
+- HTTP サーバーのアクセプトループ (`StudyGroup.Http.Server`、`network` の Socket API の上に直接書いている)
+- HTTP クライアント (HTTP 専用、学習成果として `StudyGroup.Http.Client` に残してある)
+- CLI 引数パース (`StudyGroup.Cli.parseArgs`、パターンマッチで宣言的に書く)
+- URL パーセントエンコード / デコード (日本語対応)
+- UTF-8 エンコード / デコード (RFC 3629 準拠)
+
+### 委譲している外部ライブラリ
+
+| ライブラリ | 用途 | なぜ委譲したか |
+|---|---|---|
+| `network` | TCP ソケット (`Network.Socket`) | OS のソケット API を `base` から直接叩く手段がない |
+| `bytestring` | バイト列の取り扱い | TLS クライアントとのインターフェイス・バイナリ I/O のため |
+| `http-client` + `http-client-tls` | CLI から HTTPS API サーバーへリクエストを送る (`StudyGroup.Http.ClientTls`) | TLS ハンドシェイクと証明書検証を自前で書くのは学習スコープ外。Cloud Run の HTTPS エンドポイントに繋ぐためにここだけ妥協 |
+
 詳細は [`CLAUDE.md`](./CLAUDE.md) と [`docs/overview.md`](./docs/overview.md) を参照。
 
-## セットアップ
+## セットアップと起動 (Docker Compose 推奨)
+
+ローカル実行は Docker Compose を使うのが最短ルート。GHC / Cabal をホストにインストールする必要がない。
+
+### 前提
+
+- Docker / Docker Compose がインストール済み
+
+### API サーバーを起動
+
+```bash
+# ビルド & 起動 (フォアグラウンド)
+docker compose up --build
+
+# バックグラウンド起動
+docker compose up --build -d
+
+# 停止
+docker compose down
+```
+
+- ポート: `http://localhost:8080`
+- データ: ホストの `./data` がコンテナの `/app/data` にマウントされ、`study-group.json` がホスト側に永続化される
+- ファイルが無い / 壊れている場合は `defaultData` で起動する
+
+### CLI をコンテナ内で実行
+
+CLI バイナリ (`study-group`) も同じイメージに含まれているため、サーバー起動中の同じコンテナから叩ける:
+
+```bash
+# ヘルプ
+docker compose exec server study-group
+docker compose exec server study-group --help
+
+# メンバー一覧
+docker compose exec server study-group interests list
+
+# 特定メンバーの興味一覧
+docker compose exec server study-group interests list nori
+
+# 興味を追加 / 削除
+docker compose exec server study-group interests add nori Rust
+docker compose exec server study-group interests remove nori Rust
+
+# 勉強会予定の一覧 / 追加
+docker compose exec server study-group sessions list
+docker compose exec server study-group sessions add 2026-04-16 "HTTP server"
+```
+
+CLI はデフォルトで `http://localhost:8080` に接続する。コンテナ内で動かす場合、サーバーが同じコンテナで listen しているのでそのままで届く。
+
+### 接続先 API サーバーを切り替える
+
+CLI は環境変数 `STUDY_GROUP_API_URL` を読み、未設定なら `http://localhost:8080` に接続する。Cloud Run など別ホストの API サーバーを叩きたい場合:
+
+```bash
+docker compose exec -e STUDY_GROUP_API_URL=https://study-group-server-xxxxx.asia-northeast1.run.app \
+  server study-group interests list
+```
+
+HTTPS の場合は内部の `http-client-tls` が TLS ハンドシェイクを行うので、追加の設定は不要。
+
+## Docker を使わずに直接ビルドする (開発者向け)
+
+Haskell を学習しながら触りたい場合は `cabal` で直接ビルドできる。
 
 ### 前提
 
 - GHC 9.6 系 + Cabal 3.x (推奨: [GHCup](https://www.haskell.org/ghcup/) 経由でインストール)
-- `openssl` コマンド (HTTPS で API サーバーに接続する場合のみ)
 
-### 依存解決とビルド
+### ビルドと起動
 
 ```bash
 # 全ターゲットをビルド (初回は依存解決に時間がかかる)
 cabal build all
-```
 
-ビルドが通れば `study-group-server` (API サーバー) と `study-group` (CLI) の 2 つのバイナリが生成される。
-
-## ローカルでの使い方
-
-### 1. API サーバーを起動
-
-```bash
+# API サーバーを起動
 cabal run study-group-server
-```
 
-- ポート: `8080`
-- データファイル: カレントディレクトリ直下の `data/study-group.json` を読み書きする
-- ファイルが存在しない / 壊れている場合は `defaultData` で起動する
-
-### 2. CLI を別ターミナルから実行
-
-```bash
-# ヘルプを表示
-cabal run study-group
+# CLI を別ターミナルから実行
 cabal run study-group -- --help
-
-# メンバー一覧
 cabal run study-group -- interests list
-
-# 特定メンバーの興味一覧
-cabal run study-group -- interests list nori
-
-# 興味を追加
-cabal run study-group -- interests add nori Rust
-
-# 興味を削除
-cabal run study-group -- interests remove nori Rust
-
-# 勉強会予定一覧
-cabal run study-group -- sessions list
-
-# 勉強会予定を追加
 cabal run study-group -- sessions add 2026-04-16 "HTTP server"
 ```
 
 `cabal run` の `--` 以降が CLI 本体への引数になる点に注意。
 
-### 3. 接続先 API サーバーを切り替える
+## Cloud Run へのデプロイ
 
-CLI は環境変数 `STUDY_GROUP_API_URL` を読み、未設定なら `http://localhost:8080` に接続する。Cloud Run など別ホストの API サーバーを叩きたい場合:
-
-```bash
-export STUDY_GROUP_API_URL=https://study-group-server-xxxxx.asia-northeast1.run.app
-cabal run study-group -- interests list
-```
-
-HTTPS の場合は内部で `openssl s_client` を起動して TLS ハンドシェイクを行う。
-
-## Docker / Cloud Run でのデプロイ
-
-`docker compose up --build` でローカルにコンテナ起動できる。Cloud Run へのデプロイ手順 (GCS Volume Mount による永続化を含む) は [`docs/deploy.md`](./docs/deploy.md) を参照。
+Cloud Run への本番デプロイ手順 (GCS Volume Mount による永続化を含む) は [`docs/deploy.md`](./docs/deploy.md) を参照。
 
 ## ディレクトリ構成
 

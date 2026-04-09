@@ -32,10 +32,8 @@ COPY --from=builder /build/study-group-server /usr/local/bin/study-group-server
 COPY --from=builder /build/study-group /usr/local/bin/study-group
 
 # データディレクトリを作成（ボリュームマウント用）
+# data/ は .gitignore 対象のため COPY せず、起動時に defaultData にフォールバックする
 RUN mkdir -p /app/data
-
-# 初期データファイルをコピー
-COPY data/ /app/data/
 
 EXPOSE 8080
 

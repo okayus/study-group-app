@@ -1,0 +1,35 @@
+cabal-version: 3.0
+name:          study-group-app
+version:       0.1.0.0
+synopsis:      Weekly study group management app
+license:       MIT
+build-type:    Simple
+
+common shared
+  default-language: Haskell2010
+  ghc-options:      -Wall
+  build-depends:    base >=4.14 && <5
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    StudyGroup.Types
+    StudyGroup.Json.Types
+    StudyGroup.Json.Parser
+    StudyGroup.Json.Printer
+    StudyGroup.Json.Encode
+    StudyGroup.Storage
+    StudyGroup.Operations
+
+executable study-group-server
+  import:          shared
+  hs-source-dirs:  app
+  main-is:         Server.hs
+  build-depends:   study-group-app
+
+executable study-group
+  import:          shared
+  hs-source-dirs:  app
+  main-is:         Client.hs
+  build-depends:   study-group-app

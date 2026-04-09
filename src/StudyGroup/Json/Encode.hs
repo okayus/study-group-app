@@ -3,6 +3,8 @@ module StudyGroup.Json.Encode
   , jsonToAppData
   , memberNameToString
   , stringToMemberName
+  , interestToJson
+  , sessionToJson
   ) where
 
 import StudyGroup.Types

@@ -13,6 +13,7 @@ common shared
 library
   import:          shared
   hs-source-dirs:  src
+  build-depends:   network >=3.1 && <4
   exposed-modules:
     StudyGroup.Types
     StudyGroup.Json.Types
@@ -21,6 +22,12 @@ library
     StudyGroup.Json.Encode
     StudyGroup.Storage
     StudyGroup.Operations
+    StudyGroup.Http.Types
+    StudyGroup.Http.Parser
+    StudyGroup.Http.Response
+    StudyGroup.Http.Router
+    StudyGroup.Http.Server
+    StudyGroup.Api
 
 executable study-group-server
   import:          shared

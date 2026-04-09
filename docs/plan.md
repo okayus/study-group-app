@@ -51,12 +51,12 @@
 ## Phase 4: Docker & デプロイ
 
 ### Step 7: コンテナ化
-- [ ] マルチステージ Dockerfile
-- [ ] docker-compose.yml（ローカル開発用）
+- [x] マルチステージ Dockerfile
+- [x] docker-compose.yml（ローカル開発用）
 
 ### Step 8: Google Cloud ホスティング調査・デプロイ
-- [ ] ホスティング候補の比較調査（下記参照）
-- [ ] デプロイ設定・実施
+- [x] ホスティング候補の比較調査（下記参照）
+- [x] デプロイ設定・実施
 
 ---
 

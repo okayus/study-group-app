@@ -1,0 +1,6 @@
+dist-newstyle/
+.git/
+tmp/
+*.md
+docs/
+CLAUDE.md

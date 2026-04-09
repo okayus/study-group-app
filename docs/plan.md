@@ -23,18 +23,18 @@
 ## Phase 2: HTTP サーバー（自前実装）
 
 ### Step 4: TCP ソケットで HTTP サーバーを作る
-- [ ] `Network.Socket` でリクエストを受け付け
-- [ ] HTTP リクエストのパース（メソッド、パス、ボディ）
-- [ ] HTTP レスポンスの組み立て
-- [ ] ルーティング（パターンマッチで振り分け）
+- [x] `Network.Socket` でリクエストを受け付け
+- [x] HTTP リクエストのパース（メソッド、パス、ボディ）
+- [x] HTTP レスポンスの組み立て
+- [x] ルーティング（パターンマッチで振り分け）
 
 ### Step 5: API エンドポイント実装
-- [ ] `GET  /members` - メンバー一覧
-- [ ] `GET  /members/:name/interests` - メンバーの興味リスト
-- [ ] `POST /members/:name/interests` - 興味の追加
-- [ ] `DELETE /members/:name/interests/:topic` - 興味の削除
-- [ ] `GET  /sessions` - 勉強会予定一覧
-- [ ] `POST /sessions` - 勉強会予定の追加
+- [x] `GET  /members` - メンバー一覧
+- [x] `GET  /members/:name/interests` - メンバーの興味リスト
+- [x] `POST /members/:name/interests` - 興味の追加
+- [x] `DELETE /members/:name/interests/:topic` - 興味の削除
+- [x] `GET  /sessions` - 勉強会予定一覧
+- [x] `POST /sessions` - 勉強会予定の追加
 
 ## Phase 3: CLI クライアント（自前実装）
 
